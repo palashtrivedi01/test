@@ -1,14 +1,11 @@
-name: Continuous Deployment (no-docker)
-
+name: Continuous Deployment (No Docker)
 on:
   push:
     branches:
       - develop
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,54 +23,54 @@ jobs:
       - name: Get JAR file name
         id: jar-file
         run: |
-          JAR_FILE=$(ls target/*.jar | grep -v original | grep -v sources | grep -v javadoc | head -n1)
+          JAR_FILE=$(ls target/*.jar | grep -v original)
           echo "jar_path=$JAR_FILE" >> $GITHUB_OUTPUT
           echo "jar_name=$(basename $JAR_FILE)" >> $GITHUB_OUTPUT
-
-      - name: Upload JAR to EC2
+      - name: Deploy to EC2
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           source: ${{ steps.jar-file.outputs.jar_path }}
-          target: /home/${{ secrets.EC2_USERNAME }}/app/
+          target: /home/${{ secrets.EC2_USERNAME }}/app
           strip_components: 1
 
-      - name: Restart Application on EC2
+      - name: Start Application on EC2
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            cd ~/app
-
-            echo "Stopping old process on port 8080..."
-
-            PORT_PID=$(lsof -t -i:8080) || true
-            if [ ! -z "$PORT_PID" ]; then
-              echo "Killing PID: $PORT_PID"
-              kill -9 $PORT_PID || true
+            # Navigate to app directory
+            cd /home/${{ secrets.EC2_USERNAME }}/app
+            
+            # Stop existing application
+            if [ -f app.pid ]; then
+              PID=$(cat app.pid)
+              if ps -p $PID > /dev/null 2>&1; then
+                echo "Stopping existing application (PID: $PID)"
+                kill -15 $PID
+                sleep 5
+                # Force kill if still running
+                if ps -p $PID > /dev/null 2>&1; then
+                  kill -9 $PID
+                fi
+              fi
+              rm -f app.pid
             fi
-
-            # Also kill any java jar processes
-            pkill -9 -f "java.*jar" || true
-
-            sleep 2
-
-            echo "Starting new application..."
+            
+            # Start new application
             nohup java -jar ${{ steps.jar-file.outputs.jar_name }} > application.log 2>&1 &
-
+            echo $! > app.pid
+            echo "Application started with PID: $(cat app.pid)"
+            
+            # Wait and verify
             sleep 5
-
-            echo "Checking process..."
-            if pgrep -f "java.*jar" > /dev/null; then
-              echo "✅ Application started successfully"
-              echo "Process ID: $(pgrep -f 'java.*jar')"
+            if ps -p $(cat app.pid) > /dev/null 2>&1; then
+              echo "Application is running successfully"
             else
-              echo "❌ Failed to start application"
-              echo "Last 20 log lines:"
-              tail -20 application.log
+              echo "Failed to start application"
               exit 1
             fi
