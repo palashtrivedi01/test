@@ -1,12 +1,13 @@
 package com.test.rest.web;
 
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController("test")
 public class Web {
 
-    @RequestMapping("/test2")
+    @GetMapping("/test2")
     public String test(){
         return "test";
     }
