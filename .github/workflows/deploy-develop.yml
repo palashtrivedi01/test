@@ -22,53 +22,52 @@ jobs:
       - name: Build with Maven
         run: mvn -B clean package -DskipTests
 
-      - name: Prepare SSH key
+      - name: Get JAR file name
+        id: jar-file
         run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          # add host to known_hosts to avoid interactive prompt
-          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
-      - name: Copy jar to server
-        run: |
-          mkdir -p target
-          # pick the first non-test jar in target
-          JAR=$(ls target/*.jar 2>/dev/null | grep -v -E "(sources|javadoc)" | head -n1 || true)
-          if [ -z "$JAR" ]; then
-            echo "No jar found in target/ — failing"
-            ls -l target || true
-            exit 1
-          fi
-          scp -o StrictHostKeyChecking=no "$JAR" "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}":~/app/app.jar
-      - name: Restart app on server (kill port 8080 / app.jar and start with nohup)
-        run: |
-          ssh -o StrictHostKeyChecking=no "${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}" bash -s <<'SSH_SCRIPT'
-            set -e
-            mkdir -p ~/app
-            echo "Stopping any process on port 8080 or running app.jar..."
+          JAR_FILE=$(ls target/*.jar | grep -v original | grep -v sources | grep -v javadoc | head -n1)
+          echo "jar_path=$JAR_FILE" >> $GITHUB_OUTPUT
+          echo "jar_name=$(basename $JAR_FILE)" >> $GITHUB_OUTPUT
 
-            # Try to find PID by port (lsof), then fallback to pgrep for app.jar
-            PID=""
-            if command -v lsof >/dev/null 2>&1; then
-              PID=$(lsof -ti:8080 2>/dev/null || true)
-            fi
+      - name: Deploy JAR to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: ${{ steps.jar-file.outputs.jar_path }}
+          target: /home/${{ secrets.EC2_USERNAME }}/app/
+          strip_components: 1
+          overwrite: true
 
-            if [ -z "$PID" ]; then
-              PID=$(pgrep -f 'app.jar' || true)
-            fi
-
-            if [ -n "$PID" ]; then
-              echo "Found PID(s): $PID — killing..."
-              kill -9 $PID || true
-              sleep 2
+      - name: Restart Application on EC2
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/app
+            
+            echo "Stopping any process on port 8080..."
+            # Kill process on port 8080
+            sudo fuser -k 8080/tcp || true
+            # Or kill by process name
+            pkill -f 'java.*jar' || true
+            sleep 3
+            
+            echo "Starting application..."
+            nohup java -jar ${{ steps.jar-file.outputs.jar_name }} > application.log 2>&1 &
+            
+            sleep 5
+            
+            # Verify
+            if pgrep -f 'java.*jar' > /dev/null; then
+              echo "✅ Application started successfully"
+              echo "Process ID: $(pgrep -f 'java.*jar')"
             else
-              echo "No running app found on port 8080 or app.jar process."
+              echo "❌ Failed to start application"
+              echo "Last 20 lines of log:"
+              tail -20 application.log
+              exit 1
             fi
-
-            echo "Starting app with nohup (logging to ~/app/app.log)..."
-            # ensure java is available on the server, redirect output to log, run in background
-            nohup java -jar ~/app/app.jar > ~/app/app.log 2>&1 &
-
-            echo "Done. Tail last 10 lines of log:"
-            tail -n 10 ~/app/app.log || true
-          SSH_SCRIPT
