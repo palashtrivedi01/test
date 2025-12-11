@@ -47,31 +47,22 @@ jobs:
             # Navigate to app directory
             cd /home/${{ secrets.EC2_USERNAME }}/app
             
-            # Stop existing application
-            if [ -f app.pid ]; then
-              PID=$(cat app.pid)
-              if ps -p $PID > /dev/null 2>&1; then
-                echo "Stopping existing application (PID: $PID)"
-                kill -15 $PID
-                sleep 5
-                # Force kill if still running
-                if ps -p $PID > /dev/null 2>&1; then
-                  kill -9 $PID
-                fi
-              fi
-              rm -f app.pid
-            fi
+            # Stop existing application (find Java process running JAR)
+            echo "Stopping existing application..."
+            pkill -f 'java.*jar' || true
+            sleep 3
             
             # Start new application
+            echo "Starting new application..."
             nohup java -jar ${{ steps.jar-file.outputs.jar_name }} > application.log 2>&1 &
-            echo $! > app.pid
-            echo "Application started with PID: $(cat app.pid)"
             
             # Wait and verify
             sleep 5
-            if ps -p $(cat app.pid) > /dev/null 2>&1; then
+            if pgrep -f 'java.*jar' > /dev/null; then
               echo "Application is running successfully"
+              echo "Process ID: $(pgrep -f 'java.*jar')"
             else
               echo "Failed to start application"
+              tail -50 application.log
               exit 1
             fi
