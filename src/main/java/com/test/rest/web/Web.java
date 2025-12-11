@@ -4,10 +4,11 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-@RestController("test")
+@RestController
+@RequestMapping("/api")  // Base path for all endpoints in this controller
 public class Web {
 
-    @GetMapping("/test23")
+    @GetMapping("/test234")
     public String test(){
         return "test";
     }
