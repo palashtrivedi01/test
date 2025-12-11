@@ -49,10 +49,17 @@ jobs:
           script: |
             cd ~/app
 
-            echo "Stopping any old Java process..."
-            # No sudo here (sudo kills SSH session)
-            fuser -k 8080/tcp || true
-            pkill -f "java.*jar" || true
+            echo "Stopping old process on port 8080..."
+
+            PORT_PID=$(lsof -t -i:8080) || true
+            if [ ! -z "$PORT_PID" ]; then
+              echo "Killing PID: $PORT_PID"
+              kill -9 $PORT_PID || true
+            fi
+
+            # Also kill any java jar processes
+            pkill -9 -f "java.*jar" || true
+
             sleep 2
 
             echo "Starting new application..."
